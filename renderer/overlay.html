@@ -187,10 +187,10 @@
       font-variant-numeric: tabular-nums;
     }
 
-    /* HUD bar at the bottom */
+    /* HUD bar at the top */
     #hud {
       position: fixed;
-      bottom: 24px;
+      top: 24px;
       left: 50%;
       transform: translateX(-50%);
       display: none;
@@ -255,10 +255,10 @@
   <div id="floating-root">
     <div id="panel">
       <div class="toolbar-row">
-        <button class="tool-btn" data-mode="draw">펜</button>
-        <button class="tool-btn" data-mode="highlight">형광펜</button>
-        <button class="tool-btn" data-mode="eraser">지우개</button>
-        <button class="tool-btn danger" id="clear-all-btn" type="button">전체삭제</button>
+        <button class="tool-btn" data-mode="draw" title="펜"><img src="../assets/icons/pen.png" width="20" height="20"></button>
+        <button class="tool-btn" data-mode="highlight" title="형광펜"><img src="../assets/icons/highlight.png" width="20" height="20"></button>
+        <button class="tool-btn" data-mode="eraser" title="지우개"><img src="../assets/icons/eraser.png" width="20" height="20"></button>
+        <button class="tool-btn danger" id="clear-all-btn" type="button" title="전체삭제"><img src="../assets/icons/clear-all.png" width="20" height="20"></button>
         <div class="colors" id="colors"></div>
       </div>
       <div class="size-controls">

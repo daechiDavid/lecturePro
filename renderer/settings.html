@@ -108,6 +108,62 @@
       cursor: pointer;
     }
 
+    /* ── Floating monitor section ── */
+    .floating-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .floating-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .floating-row label {
+      font-size: 12px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      min-width: 60px;
+    }
+
+    .floating-row select,
+    .floating-row input[type="number"] {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 12px;
+      padding: 5px 8px;
+      outline: none;
+    }
+
+    .floating-row select {
+      flex: 1;
+      cursor: pointer;
+    }
+
+    .floating-row select:hover,
+    .floating-row input[type="number"]:hover {
+      border-color: rgba(255,255,255,0.2);
+    }
+
+    .floating-row select:focus,
+    .floating-row input[type="number"]:focus {
+      border-color: var(--accent);
+    }
+
+    .floating-row input[type="number"] {
+      width: 80px;
+    }
+
+    .floating-dim {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-left: 4px;
+    }
+
     .shortcut-list::-webkit-scrollbar { width: 5px; }
     .shortcut-list::-webkit-scrollbar-track { background: transparent; }
     .shortcut-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
@@ -291,6 +347,23 @@
     </div>
 
     <div class="shortcut-list" id="list"></div>
+
+    <div class="prefs">
+      <div class="prefs-title">플로팅 메뉴 위치</div>
+      <div class="floating-section">
+        <div class="floating-row">
+          <label>모니터</label>
+          <select id="floating-display"></select>
+          <span class="floating-dim" id="floating-dim"></span>
+        </div>
+        <div class="floating-row">
+          <label>X 좌표</label>
+          <input type="number" id="floating-x" min="0" step="1">
+          <label>Y 좌표</label>
+          <input type="number" id="floating-y" min="0" step="1">
+        </div>
+      </div>
+    </div>
 
     <div class="prefs">
       <div class="prefs-title">커스텀 색상 (5개)</div>

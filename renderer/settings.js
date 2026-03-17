@@ -5,6 +5,50 @@ let platform = 'darwin';
 let capturingKey = null;
 let originalColors = [];
 let pendingColors = [];
+let displays = [];
+let pendingFloatingDisplayId = null;
+let pendingFloatingX = 24;
+let pendingFloatingY = 24;
+
+function getDisplayCoordScale(display) {
+  if (!display) return 1;
+  const nativeWidth = Number(display.nativeWidth);
+  const boundsWidth = Number(display.bounds?.width);
+  if (Number.isFinite(nativeWidth) && Number.isFinite(boundsWidth) && boundsWidth > 0) {
+    return nativeWidth / boundsWidth;
+  }
+  return Number(display.scaleFactor) || 1;
+}
+
+function getDisplayCoordWidth(display) {
+  if (!display) return 0;
+  return Math.round(Number(display.nativeWidth) || (Number(display.bounds?.width) || 0) * getDisplayCoordScale(display));
+}
+
+function getDisplayCoordHeight(display) {
+  if (!display) return 0;
+  return Math.round(Number(display.nativeHeight) || (Number(display.bounds?.height) || 0) * getDisplayCoordScale(display));
+}
+
+function toDisplayCoord(value, display) {
+  return Math.round((Number(value) || 0) * getDisplayCoordScale(display));
+}
+
+function fromDisplayCoord(value, display) {
+  return Math.round((Number(value) || 0) / getDisplayCoordScale(display));
+}
+
+function getFloatingButtonSize(display) {
+  return toDisplayCoord(50, display);
+}
+
+function getFloatingDefaultX(display) {
+  return Math.max(0, getDisplayCoordWidth(display) - getFloatingButtonSize(display) - toDisplayCoord(24, display));
+}
+
+function getFloatingDefaultY(display) {
+  return Math.max(0, toDisplayCoord(24, display));
+}
 
 async function init() {
   const data = await window.electronAPI.settingsGet();
@@ -17,8 +61,29 @@ async function init() {
   originalColors = normalizeColors(incoming);
   pendingColors = [...originalColors];
 
+  // Load display list & floating monitor settings
+  displays = data.displays || [];
+  pendingFloatingDisplayId = data.floatingDisplayId || (displays.find((d) => d.isPrimary)?.id ?? null);
+
+  // Convert absolute floatingPosition to local overlay coords
+  if (data.floatingPosition && pendingFloatingDisplayId) {
+    const selectedDisplay = displays.find((d) => d.id === pendingFloatingDisplayId);
+    if (selectedDisplay) {
+      pendingFloatingX = Math.max(0, toDisplayCoord(data.floatingPosition.x - selectedDisplay.bounds.x, selectedDisplay));
+      pendingFloatingY = Math.max(0, toDisplayCoord(data.floatingPosition.y - selectedDisplay.bounds.y, selectedDisplay));
+    }
+  } else {
+    // Default: top-right
+    const sel = displays.find((d) => d.id === pendingFloatingDisplayId);
+    if (sel) {
+      pendingFloatingX = getFloatingDefaultX(sel);
+      pendingFloatingY = getFloatingDefaultY(sel);
+    }
+  }
+
   renderList();
   renderColorPickers();
+  renderFloatingMonitor();
 }
 
 const MAC_SYMBOLS = {
@@ -311,6 +376,61 @@ function renderColorPickers() {
   });
 }
 
+function renderFloatingMonitor() {
+  const select = document.getElementById('floating-display');
+  const dimEl = document.getElementById('floating-dim');
+  const xInput = document.getElementById('floating-x');
+  const yInput = document.getElementById('floating-y');
+
+  select.innerHTML = '';
+  displays.forEach((d) => {
+    const option = document.createElement('option');
+    option.value = String(d.id);
+    option.textContent = d.label;
+    if (d.id === pendingFloatingDisplayId) option.selected = true;
+    select.appendChild(option);
+  });
+
+  updateFloatingDim();
+  xInput.value = Math.round(pendingFloatingX);
+  yInput.value = Math.round(pendingFloatingY);
+
+  select.addEventListener('change', () => {
+    pendingFloatingDisplayId = Number(select.value);
+    const sel = displays.find((d) => d.id === pendingFloatingDisplayId);
+    if (sel) {
+      // Reset to top-right of newly selected display
+      pendingFloatingX = getFloatingDefaultX(sel);
+      pendingFloatingY = getFloatingDefaultY(sel);
+      xInput.value = pendingFloatingX;
+      yInput.value = pendingFloatingY;
+    }
+    updateFloatingDim();
+  });
+
+  xInput.addEventListener('input', () => {
+    pendingFloatingX = Number(xInput.value) || 0;
+  });
+
+  yInput.addEventListener('input', () => {
+    pendingFloatingY = Number(yInput.value) || 0;
+  });
+}
+
+function updateFloatingDim() {
+  const dimEl = document.getElementById('floating-dim');
+  const xInput = document.getElementById('floating-x');
+  const yInput = document.getElementById('floating-y');
+  const sel = displays.find((d) => d.id === pendingFloatingDisplayId);
+  if (sel) {
+    dimEl.textContent = `좌표 범위: ${getDisplayCoordWidth(sel)} × ${getDisplayCoordHeight(sel)}`;
+    xInput.max = Math.max(0, getDisplayCoordWidth(sel) - getFloatingButtonSize(sel));
+    yInput.max = Math.max(0, getDisplayCoordHeight(sel) - getFloatingButtonSize(sel));
+  } else {
+    dimEl.textContent = '';
+  }
+}
+
 document.getElementById('btn-save').addEventListener('click', async () => {
   if (capturingKey) stopCapture();
   if (!updateConflicts()) {
@@ -323,6 +443,14 @@ document.getElementById('btn-save').addEventListener('click', async () => {
     const payload = {
       shortcuts: pending,
       customColors: normalizeColors(pendingColors),
+      floatingDisplayId: pendingFloatingDisplayId,
+      floatingPosition: (() => {
+        const sel = displays.find((d) => d.id === pendingFloatingDisplayId);
+        return {
+          x: fromDisplayCoord(pendingFloatingX, sel),
+          y: fromDisplayCoord(pendingFloatingY, sel),
+        };
+      })(),
     };
 
     const result = await window.electronAPI.settingsSave(payload);
@@ -368,8 +496,17 @@ document.getElementById('btn-reset').addEventListener('click', async () => {
   originalColors = normalizeColors(result.penPrefs?.customColors);
   pendingColors = [...originalColors];
 
+  // Reset floating to primary monitor top-right
+  const primary = displays.find((d) => d.isPrimary);
+  if (primary) {
+    pendingFloatingDisplayId = primary.id;
+    pendingFloatingX = getFloatingDefaultX(primary);
+    pendingFloatingY = getFloatingDefaultY(primary);
+  }
+
   refreshAllTags();
   renderColorPickers();
+  renderFloatingMonitor();
   updateConflicts();
   setStatus('success', '기본값으로 복원됐습니다.');
 });

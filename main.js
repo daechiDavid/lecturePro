@@ -24,8 +24,11 @@ if (!gotLock) {
 
 const DEFAULT_COLOR_PRESETS = ['#FF4444', '#4488FF', '#44DD88', '#FFD700', '#FFFFFF'];
 const FLOATING_OFF_WIDTH = 50;
-const FLOATING_ON_WIDTH = 418;
-const FLOATING_HEIGHT = 50;
+const FLOATING_ON_WIDTH = 460;
+const FLOATING_OFF_HEIGHT = 50;
+const FLOATING_ON_HEIGHT = 126;
+const HUD_WIDTH = 240;
+const HUD_HEIGHT = 48;
 
 // ── Default shortcuts ─────────────────────────────────────────────────────────
 const DEFAULT_SHORTCUTS = {
@@ -95,6 +98,7 @@ const PEN_PREFS_DEFAULTS = {
   eraserSize: 4,
   customColors: [...DEFAULT_COLOR_PRESETS],
   floatingPosition: null,
+  floatingDisplayId: null,
 };
 
 function penPrefsPath() {
@@ -119,24 +123,127 @@ function clampToolSize(size, fallback = 4) {
 }
 
 function normalizeFloatingPosition(pos, bounds) {
-  if (!bounds) {
-    try { bounds = electronScreen.getPrimaryDisplay().bounds; } catch { /* screen not ready yet */ }
-  }
-  if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number' || !bounds) return null;
+  if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') return null;
   const margin = 8;
-  let localX = Math.round(pos.x);
-  let localY = Math.round(pos.y);
+  const x = Math.round(pos.x);
+  const y = Math.round(pos.y);
 
-  // Backward compatibility: previously persisted values were absolute screen coords.
-  if (localX > bounds.width || localY > bounds.height || localX < 0 || localY < 0) {
-    localX -= bounds.x;
-    localY -= bounds.y;
+  return { x, y };
+}
+
+// Find which display contains the given absolute screen point
+function getDisplayForPoint(absX, absY) {
+  const displays = electronScreen.getAllDisplays();
+  for (const d of displays) {
+    const b = d.bounds;
+    if (absX >= b.x && absX < b.x + b.width && absY >= b.y && absY < b.y + b.height) {
+      return d;
+    }
   }
+  return electronScreen.getPrimaryDisplay();
+}
+
+// Convert absolute position to local display coords (no clamping — renderer handles it)
+function floatingToLocal(absPos, display) {
+  if (!absPos || !display) return null;
+  const b = display.bounds;
+  return {
+    x: absPos.x - b.x,
+    y: absPos.y - b.y,
+  };
+}
+
+function getDisplayNativeSize(display) {
+  return {
+    width: Math.round(display.bounds.width * display.scaleFactor),
+    height: Math.round(display.bounds.height * display.scaleFactor),
+  };
+}
+
+function getVirtualBounds() {
+  const displays = electronScreen.getAllDisplays();
+  if (displays.length === 0) {
+    const primary = electronScreen.getPrimaryDisplay();
+    return { ...primary.bounds };
+  }
+
+  const left = Math.min(...displays.map((display) => display.bounds.x));
+  const top = Math.min(...displays.map((display) => display.bounds.y));
+  const right = Math.max(...displays.map((display) => display.bounds.x + display.bounds.width));
+  const bottom = Math.max(...displays.map((display) => display.bounds.y + display.bounds.height));
 
   return {
-    x: Math.max(margin, Math.min(localX, bounds.width - FLOATING_OFF_WIDTH - margin)),
-    y: Math.max(margin, Math.min(localY, bounds.height - FLOATING_HEIGHT - margin)),
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
   };
+}
+
+function getTargetFloatingDisplay() {
+  if (state.floatingDisplayId) {
+    const target = electronScreen.getAllDisplays().find((display) => display.id === state.floatingDisplayId);
+    if (target) return target;
+  }
+
+  if (state.floatingPosition) {
+    return getDisplayForPoint(state.floatingPosition.x, state.floatingPosition.y);
+  }
+
+  return electronScreen.getPrimaryDisplay();
+}
+
+function getDefaultFloatingPosition(display = getTargetFloatingDisplay()) {
+  return {
+    x: display.bounds.x + display.bounds.width - FLOATING_OFF_WIDTH - 24,
+    y: display.bounds.y + 24,
+  };
+}
+
+function clampFloatingPosition(absPos, display = getTargetFloatingDisplay()) {
+  if (!absPos) return getDefaultFloatingPosition(display);
+  const margin = 8;
+  const maxHeight = Math.max(FLOATING_OFF_HEIGHT, FLOATING_ON_HEIGHT);
+  return {
+    x: Math.max(display.bounds.x + margin, Math.min(Math.round(absPos.x), display.bounds.x + display.bounds.width - FLOATING_OFF_WIDTH - margin)),
+    y: Math.max(display.bounds.y + margin, Math.min(Math.round(absPos.y), display.bounds.y + display.bounds.height - maxHeight - margin)),
+  };
+}
+
+function shouldExpandFloatingRight(position, display = getTargetFloatingDisplay()) {
+  return position.x + (FLOATING_OFF_WIDTH / 2) < display.bounds.x + (display.bounds.width / 2);
+}
+
+function getFloatingWindowBounds() {
+  const display = getTargetFloatingDisplay();
+  const anchoredPos = clampFloatingPosition(state.floatingPosition || getDefaultFloatingPosition(display), display);
+  const expandRight = shouldExpandFloatingRight(anchoredPos, display);
+  const width = state.overlayActive ? FLOATING_ON_WIDTH : FLOATING_OFF_WIDTH;
+  const height = state.overlayActive ? FLOATING_ON_HEIGHT : FLOATING_OFF_HEIGHT;
+  const extraWidth = width - FLOATING_OFF_WIDTH;
+
+  return {
+    x: expandRight ? anchoredPos.x : anchoredPos.x - extraWidth,
+    y: anchoredPos.y,
+    width,
+    height,
+    expandRight,
+    anchoredPos,
+  };
+}
+
+function getHudWindowBounds() {
+  const display = getTargetFloatingDisplay();
+  return {
+    x: display.bounds.x + Math.round((display.bounds.width - HUD_WIDTH) / 2),
+    y: display.bounds.y + 24,
+    width: HUD_WIDTH,
+    height: HUD_HEIGHT,
+  };
+}
+
+function shouldShowHud() {
+  return state.overlayActive && state.mode !== 'none';
 }
 
 function loadPenPrefs() {
@@ -150,6 +257,7 @@ function loadPenPrefs() {
     const highlightSize = clampToolSize(saved.highlightSize, legacySize);
     const eraserSize = clampToolSize(saved.eraserSize, legacySize);
     const floatingPosition = normalizeFloatingPosition(saved.floatingPosition);
+    const floatingDisplayId = typeof saved.floatingDisplayId === 'number' ? saved.floatingDisplayId : null;
 
     // Keep raw position so we can re-normalize after app is ready if screen wasn't available
     const rawFloatingPosition = saved.floatingPosition || null;
@@ -161,6 +269,7 @@ function loadPenPrefs() {
       eraserSize,
       customColors,
       floatingPosition,
+      floatingDisplayId,
       rawFloatingPosition,
     };
   } catch {
@@ -176,6 +285,7 @@ function persistPenPrefs() {
     eraserSize: state.eraserSize,
     customColors: state.customColors,
     floatingPosition: state.floatingPosition,
+    floatingDisplayId: state.floatingDisplayId,
   }, null, 2));
 }
 
@@ -183,10 +293,11 @@ function persistPenPrefs() {
 let currentShortcuts = loadShortcuts();
 const savedPenPrefs = loadPenPrefs();
 
-const overlayWins = new Map();
+let overlayWin = null;
 let zoomWin = null;
 let settingsWin = null;
 let floatingWin = null;
+let hudWin = null;
 let tray = null;
 let cursorTracker = null;
 
@@ -194,38 +305,41 @@ const state = {
   overlayActive: false,
   mode: 'none',
   zoomActive: false,
-  zoomLevel: 3,
+  zoomLevel: 1.5,
   penColor: savedPenPrefs.penColor,
   drawSize: savedPenPrefs.drawSize,
   highlightSize: savedPenPrefs.highlightSize,
   eraserSize: savedPenPrefs.eraserSize,
   customColors: normalizeColorPresets(savedPenPrefs.customColors),
   floatingPosition: savedPenPrefs.floatingPosition,
+  floatingDisplayId: savedPenPrefs.floatingDisplayId,
 };
 
 // ── Window creation ───────────────────────────────────────────────────────────
 function createOverlayWindow() {
-  for (const display of electronScreen.getAllDisplays()) {
-    ensureOverlayWindowForDisplay(display);
-  }
+  ensureOverlayForDisplay();
 
-  electronScreen.on('display-metrics-changed', syncOverlayWindows);
-  electronScreen.on('display-added', syncOverlayWindows);
-  electronScreen.on('display-removed', syncOverlayWindows);
+  electronScreen.on('display-metrics-changed', syncOverlayWindow);
+  electronScreen.on('display-added', syncOverlayWindow);
+  electronScreen.on('display-removed', syncOverlayWindow);
 }
 
-function ensureOverlayWindowForDisplay(display) {
-  const existing = overlayWins.get(display.id);
-  if (existing && !existing.isDestroyed()) {
-    existing.setBounds(display.bounds);
-    return existing;
+function ensureOverlayForDisplay() {
+  const display = getTargetFloatingDisplay();
+
+  const native = getDisplayNativeSize(display);
+  const overlayBounds = { x: display.bounds.x, y: display.bounds.y, width: native.width, height: native.height };
+
+  if (overlayWin && !overlayWin.isDestroyed()) {
+    overlayWin.setBounds(overlayBounds);
+    return;
   }
 
-  const overlayWin = new BrowserWindow({
-    x: display.bounds.x,
-    y: display.bounds.y,
-    width: display.bounds.width,
-    height: display.bounds.height,
+  overlayWin = new BrowserWindow({
+    x: overlayBounds.x,
+    y: overlayBounds.y,
+    width: overlayBounds.width,
+    height: overlayBounds.height,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -246,56 +360,147 @@ function ensureOverlayWindowForDisplay(display) {
   overlayWin.setIgnoreMouseEvents(true, { forward: true });
   overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   overlayWin.setContentProtection(false);
+  // Use uniform alpha (setOpacity) so Windows treats the entire window as
+  // clickable, bypassing the per-pixel alpha hit test that is limited to DIP.
+  overlayWin.setOpacity(0.99);
   overlayWin.loadFile(path.join(__dirname, 'renderer', 'overlay.html'));
-  overlayWins.set(display.id, overlayWin);
 
   overlayWin.webContents.on('did-finish-load', () => {
+    const d = getTargetFloatingDisplay();
+    const n = getDisplayNativeSize(d);
+    overlayWin?.setBounds({ x: d.bounds.x, y: d.bounds.y, width: n.width, height: n.height });
     overlayWin?.showInactive();
-    sendOverlayStateToWindow(overlayWin, display.id);
+    sendOverlayState();
   });
 
   overlayWin.on('closed', () => {
-    overlayWins.delete(display.id);
+    overlayWin = null;
   });
-
-  return overlayWin;
 }
 
-function syncOverlayWindows() {
-  const displays = electronScreen.getAllDisplays();
-  const displayIds = new Set(displays.map((display) => display.id));
-
-  for (const display of displays) {
-    const win = ensureOverlayWindowForDisplay(display);
-    win?.setBounds(display.bounds);
-  }
-
-  for (const [displayId, win] of overlayWins.entries()) {
-    if (!displayIds.has(displayId)) {
-      overlayWins.delete(displayId);
-      if (win && !win.isDestroyed()) win.close();
+function syncOverlayWindow() {
+  // Edge case: if the selected floating display was disconnected, reset to primary
+  if (state.floatingDisplayId) {
+    const displays = electronScreen.getAllDisplays();
+    if (!displays.find((d) => d.id === state.floatingDisplayId)) {
+      const primary = electronScreen.getPrimaryDisplay();
+      state.floatingDisplayId = primary.id;
+      state.floatingPosition = getDefaultFloatingPosition(primary);
+      persistPenPrefs();
     }
   }
 
-  if (state.floatingPosition) {
-    const primaryBounds = electronScreen.getPrimaryDisplay().bounds;
-    state.floatingPosition = normalizeFloatingPosition(state.floatingPosition, primaryBounds);
-    persistPenPrefs();
-  }
-
+  ensureOverlayForDisplay();
   sendOverlayState();
+  positionFloatingWindow();
+  positionHudWindow();
 }
 
 function createFloatingWindow() {
-  // Floating controls are now rendered inside the overlay window.
+  const bounds = getFloatingWindowBounds();
+
+  floatingWin = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    resizable: false,
+    movable: false,
+    hasShadow: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false,
+    },
+  });
+
+  floatingWin.setAlwaysOnTop(true, 'screen-saver');
+  floatingWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  floatingWin.setContentProtection(false);
+  floatingWin.setMenuBarVisibility(false);
+  floatingWin.setBounds(bounds);
+  floatingWin.setMinimumSize(FLOATING_OFF_WIDTH, FLOATING_OFF_HEIGHT);
+  floatingWin.loadFile(path.join(__dirname, 'renderer', 'floating.html'));
+
+  floatingWin.webContents.on('did-finish-load', () => {
+    floatingWin?.showInactive();
+    floatingWin?.setBounds(getFloatingWindowBounds());
+    floatingWin?.webContents.send('floating-direction', bounds.expandRight);
+    sendFloatingState();
+  });
+
+  floatingWin.on('closed', () => {
+    floatingWin = null;
+  });
+}
+
+function createHudWindow() {
+  const bounds = getHudWindowBounds();
+
+  hudWin = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    resizable: false,
+    movable: false,
+    hasShadow: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false,
+    },
+  });
+
+  hudWin.setAlwaysOnTop(true, 'screen-saver');
+  hudWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  hudWin.setIgnoreMouseEvents(true, { forward: true });
+  hudWin.setContentProtection(false);
+  hudWin.setMenuBarVisibility(false);
+  hudWin.loadFile(path.join(__dirname, 'renderer', 'hud.html'));
+
+  hudWin.webContents.on('did-finish-load', () => {
+    positionHudWindow();
+    sendHudState();
+  });
+
+  hudWin.on('closed', () => {
+    hudWin = null;
+  });
 }
 
 function bringFloatingToFront() {
-  return;
+  if (!floatingWin || floatingWin.isDestroyed()) return;
+  floatingWin.showInactive();
+  floatingWin.moveTop();
 }
 
 function positionFloatingWindow() {
-  return;
+  if (!floatingWin || floatingWin.isDestroyed()) return;
+
+  const bounds = getFloatingWindowBounds();
+  state.floatingPosition = bounds.anchoredPos;
+  floatingWin.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  floatingWin.webContents.send('floating-direction', bounds.expandRight);
+}
+
+function positionHudWindow() {
+  if (!hudWin || hudWin.isDestroyed()) return;
+  hudWin.setBounds(getHudWindowBounds());
 }
 
 function createZoomWindow() {
@@ -375,7 +580,7 @@ function updateTrayMenu() {
   const sc = currentShortcuts;
 
   const menu = Menu.buildFromTemplate([
-    { label: 'LecturePro v1.1', enabled: false },
+    { label: 'LecturePro v1.1.1', enabled: false },
     { type: 'separator' },
     {
       label: state.overlayActive ? '오버레이 끄기' : '오버레이 켜기',
@@ -416,9 +621,7 @@ function getShortcutActions() {
     toggleZoom: toggleZoom,
     clearCanvas: clearCanvas,
     undo: () => {
-      for (const overlayWin of overlayWins.values()) {
-        overlayWin?.webContents.send('undo');
-      }
+      if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('undo');
     },
     color1: () => setColorByPreset(0),
     color2: () => setColorByPreset(1),
@@ -453,9 +656,7 @@ function applyShortcuts(shortcuts) {
 
 // ── State sync ────────────────────────────────────────────────────────────────
 function sendOverlayState() {
-  for (const [displayId, overlayWin] of overlayWins.entries()) {
-    sendOverlayStateToWindow(overlayWin, displayId);
-  }
+  sendOverlayStateToWindow();
 }
 
 function getSizeKeyForMode(mode) {
@@ -472,8 +673,10 @@ function setToolSize(mode, size) {
   state[getSizeKeyForMode(mode)] = clampToolSize(size, getToolSize(mode));
 }
 
-function sendOverlayStateToWindow(overlayWin, displayId) {
+function sendOverlayStateToWindow() {
   if (!overlayWin || overlayWin.isDestroyed()) return;
+
+  const display = getTargetFloatingDisplay();
   overlayWin.webContents.send('overlay-state', {
     overlayActive: state.overlayActive,
     mode: state.mode,
@@ -483,27 +686,52 @@ function sendOverlayStateToWindow(overlayWin, displayId) {
     highlightSize: state.highlightSize,
     eraserSize: state.eraserSize,
     colorPresets: state.customColors,
-    floatingPosition: state.floatingPosition,
-    showFloatingControls: displayId === electronScreen.getPrimaryDisplay().id,
+    floatingPosition: null,
+    showFloatingControls: false,
+    showHud: false,
+    displayWidth: display.bounds.width,
+    displayHeight: display.bounds.height,
   });
 }
 
 function sendFloatingState() {
+  if (!floatingWin || floatingWin.isDestroyed()) return;
+  positionFloatingWindow();
   floatingWin?.webContents.send('floating-state', {
     overlayActive: state.overlayActive,
     mode: state.mode,
     penColor: state.penColor,
+    drawSize: state.drawSize,
+    highlightSize: state.highlightSize,
+    eraserSize: state.eraserSize,
     colorPresets: state.customColors,
   });
+}
+
+function sendHudState() {
+  if (!hudWin || hudWin.isDestroyed()) return;
+
+  positionHudWindow();
+  hudWin.webContents.send('hud-state', {
+    visible: shouldShowHud(),
+    mode: state.mode,
+    penColor: state.penColor,
+    penSize: getToolSize(state.mode),
+  });
+
+  if (shouldShowHud()) hudWin.showInactive();
+  else hudWin.hide();
 }
 
 function syncAllStates() {
   sendOverlayState();
   sendFloatingState();
+  sendHudState();
+  bringFloatingToFront();
 
   const needsMouse = state.overlayActive && ['draw', 'highlight', 'eraser'].includes(state.mode);
-  for (const overlayWin of overlayWins.values()) {
-    overlayWin?.setIgnoreMouseEvents(!needsMouse, { forward: true });
+  if (overlayWin && !overlayWin.isDestroyed()) {
+    overlayWin.setIgnoreMouseEvents(!needsMouse, { forward: true });
   }
 
   updateTrayMenu();
@@ -517,17 +745,10 @@ function toggleOverlay(forceValue) {
   state.overlayActive = next;
 
   if (state.overlayActive) {
-    for (const overlayWin of overlayWins.values()) {
-      overlayWin?.showInactive();
-    }
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.showInactive();
     if (state.mode === 'none') state.mode = 'draw';
   } else {
     state.mode = 'none';
-  }
-
-  const needsMouse = state.overlayActive && ['draw', 'highlight', 'eraser'].includes(state.mode);
-  for (const overlayWin of overlayWins.values()) {
-    overlayWin?.setIgnoreMouseEvents(!needsMouse, { forward: true });
   }
 
   syncAllStates();
@@ -536,20 +757,19 @@ function toggleOverlay(forceValue) {
 function setMode(newMode) {
   if (!['draw', 'highlight', 'eraser', 'none'].includes(newMode)) return;
 
+  const wasActive = state.overlayActive;
+
   if (newMode !== 'none' && !state.overlayActive) {
     toggleOverlay(true);
   }
 
-  if (state.mode === newMode && newMode !== 'none') {
+  // Only toggle off if the overlay was already active before this call.
+  // When the overlay was just turned on, don't toggle the requested mode off.
+  if (wasActive && state.mode === newMode && newMode !== 'none') {
     newMode = 'none';
   }
 
   state.mode = newMode;
-
-  const needsMouse = state.overlayActive && ['draw', 'highlight', 'eraser'].includes(state.mode);
-  for (const overlayWin of overlayWins.values()) {
-    overlayWin?.setIgnoreMouseEvents(!needsMouse, { forward: true });
-  }
 
   syncAllStates();
 }
@@ -591,16 +811,13 @@ async function toggleZoom() {
     const cursor = electronScreen.getCursorScreenPoint();
     const display = electronScreen.getDisplayNearestPoint(cursor);
 
+    // Take a single full-screen snapshot before showing zoom window
+    await captureZoomSnapshot(display);
+
     zoomWin?.setBounds(display.bounds);
     zoomWin?.showInactive();
     zoomWin?.webContents.send('zoom-activated', state.zoomLevel);
 
-    const cachedPayload = lastZoomFrameByDisplay.get(display.id);
-    if (cachedPayload) {
-      zoomWin?.webContents.send('zoom-frame', cachedPayload);
-    }
-
-    captureZoomFrame(cursor, display);
     startCursorTracking();
   } else {
     stopCursorTracking();
@@ -611,9 +828,7 @@ async function toggleZoom() {
 }
 
 function clearCanvas() {
-  for (const overlayWin of overlayWins.values()) {
-    overlayWin?.webContents.send('clear-canvas');
-  }
+  if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('clear-canvas');
 }
 
 function setColor(color) {
@@ -653,13 +868,11 @@ function adjustZoomLevel(delta) {
   zoomWin?.webContents.send('zoom-level-change', state.zoomLevel);
 }
 
-// ── Zoom frame capture (main process, avoids renderer recursive capture) ──────
-let zoomCaptureBusy = false;
-const lastZoomFrameByDisplay = new Map();
+// ── Zoom: one-shot snapshot + cursor panning ─────────────────────────────────
+// Instead of continuous capture, take a single screenshot when zoom activates.
+// The renderer pans the static image following the cursor at 60 fps.
 
-async function captureZoomFrame(cursor, display) {
-  if (zoomCaptureBusy) return;
-  zoomCaptureBusy = true;
+async function captureZoomSnapshot(display) {
   try {
     const capW = display.bounds.width;
     const capH = display.bounds.height;
@@ -672,66 +885,47 @@ async function captureZoomFrame(cursor, display) {
 
     const src = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
     const thumb = src.thumbnail;
-    const { width: imgW, height: imgH } = thumb.getSize();
 
-    const cx = Math.round(cursor.x - display.bounds.x);
-    const cy = Math.round(cursor.y - display.bounds.y);
-
-    const regionW = capW / state.zoomLevel;
-    const regionH = capH / state.zoomLevel;
-    const desiredX = cx - regionW / 2;
-    const desiredY = cy - regionH / 2;
-
-    const cropX = Math.max(0, Math.min(imgW - 1, Math.floor(desiredX)));
-    const cropY = Math.max(0, Math.min(imgH - 1, Math.floor(desiredY)));
-    const cropW = Math.max(1, Math.min(imgW - cropX, Math.ceil(desiredX + regionW) - cropX));
-    const cropH = Math.max(1, Math.min(imgH - cropY, Math.ceil(desiredY + regionH) - cropY));
-
-    const cropped = thumb.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
-
-    const dstX = Math.round((cropX - desiredX) * state.zoomLevel);
-    const dstY = Math.round((cropY - desiredY) * state.zoomLevel);
-    const dstW = Math.round(cropW * state.zoomLevel);
-    const dstH = Math.round(cropH * state.zoomLevel);
-
-    const payload = {
-      jpeg: cropped.toJPEG(82).toString('base64'),
-      dstX,
-      dstY,
-      dstW,
-      dstH,
-      viewW: capW,
-      viewH: capH,
-    };
-
-    lastZoomFrameByDisplay.set(display.id, payload);
-
-    if (state.zoomActive && zoomWin && !zoomWin.isDestroyed()) {
-      zoomWin.webContents.send('zoom-frame', payload);
-    }
+    // Send full screenshot as PNG buffer (lossless, one-time cost)
+    zoomWin.webContents.send('zoom-snapshot', {
+      png: thumb.toPNG(),
+      screenW: capW,
+      screenH: capH,
+    });
   } catch (e) {
-    console.error('[zoom capture]', e.message);
-  } finally {
-    zoomCaptureBusy = false;
+    console.error('[zoom snapshot]', e.message);
   }
 }
 
-// ── Cursor tracking ───────────────────────────────────────────────────────────
+// ── Cursor tracking (lightweight — only sends cursor position) ────────────────
 function startCursorTracking() {
   if (cursorTracker) return;
 
+  let lastCX = -1;
+  let lastCY = -1;
+
   const tick = () => {
+    if (!state.zoomActive || !zoomWin || zoomWin.isDestroyed()) return;
+
     const cursor = electronScreen.getCursorScreenPoint();
     const display = electronScreen.getDisplayNearestPoint(cursor);
+    const cx = cursor.x - display.bounds.x;
+    const cy = cursor.y - display.bounds.y;
 
-    if (state.zoomActive && zoomWin && !zoomWin.isDestroyed()) {
-      zoomWin.setBounds(display.bounds);
-      captureZoomFrame(cursor, display);
+    if (cx !== lastCX || cy !== lastCY) {
+      zoomWin.webContents.send('zoom-cursor-update', {
+        x: cx,
+        y: cy,
+        screenW: display.bounds.width,
+        screenH: display.bounds.height,
+      });
+      lastCX = cx;
+      lastCY = cy;
     }
   };
 
   tick();
-  cursorTracker = setInterval(tick, 12);
+  cursorTracker = setInterval(tick, 8);
 }
 
 function stopCursorTracking() {
@@ -751,18 +945,14 @@ ipcMain.handle('get-screen-source', async () => {
 });
 
 ipcMain.on('set-ignore-mouse', (_e, ignore) => {
-  const overlayWin = BrowserWindow.fromWebContents(_e.sender);
-  if (overlayWin && !overlayWin.isDestroyed()) {
-    overlayWin.setIgnoreMouseEvents(ignore, { forward: true });
+  const win = BrowserWindow.fromWebContents(_e.sender);
+  if (win && !win.isDestroyed()) {
+    win.setIgnoreMouseEvents(ignore, { forward: true });
   }
 });
 
-ipcMain.handle('overlay:get-state', (event) => {
-  const overlayWin = BrowserWindow.fromWebContents(event.sender);
-  const display = overlayWin
-    ? electronScreen.getDisplayMatching(overlayWin.getBounds())
-    : electronScreen.getPrimaryDisplay();
-
+ipcMain.handle('overlay:get-state', () => {
+  const display = getTargetFloatingDisplay();
   return {
     overlayActive: state.overlayActive,
     mode: state.mode,
@@ -772,8 +962,11 @@ ipcMain.handle('overlay:get-state', (event) => {
     highlightSize: state.highlightSize,
     eraserSize: state.eraserSize,
     colorPresets: state.customColors,
-    floatingPosition: state.floatingPosition,
-    showFloatingControls: display.id === electronScreen.getPrimaryDisplay().id,
+    floatingPosition: null,
+    showFloatingControls: false,
+    showHud: false,
+    displayWidth: display.bounds.width,
+    displayHeight: display.bounds.height,
   };
 });
 
@@ -810,24 +1003,74 @@ ipcMain.on('overlay:set-size', (_e, payload) => {
 
 ipcMain.on('floating:set-position', (_e, pos) => {
   if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') return;
-  state.floatingPosition = normalizeFloatingPosition(pos);
+
+  const senderWin = BrowserWindow.fromWebContents(_e.sender);
+
+  if (floatingWin && senderWin && senderWin.id === floatingWin.id) {
+    state.floatingPosition = clampFloatingPosition({
+      x: Math.round(pos.x),
+      y: Math.round(pos.y),
+    });
+    persistPenPrefs();
+    positionFloatingWindow();
+    positionHudWindow();
+    sendOverlayState();
+    sendHudState();
+    return;
+  }
+
+  // pos.x/y are local overlay coords in the same DIP space as display.bounds
+  const targetDisplayId = state.floatingDisplayId || electronScreen.getPrimaryDisplay().id;
+  const targetDisplay = electronScreen.getAllDisplays().find((d) => d.id === targetDisplayId)
+    || electronScreen.getPrimaryDisplay();
+
+  const absX = targetDisplay.bounds.x + Math.round(pos.x);
+  const absY = targetDisplay.bounds.y + Math.round(pos.y);
+
+  state.floatingPosition = clampFloatingPosition({ x: absX, y: absY }, targetDisplay);
   persistPenPrefs();
+  positionFloatingWindow();
+  positionHudWindow();
   sendOverlayState();
+  sendHudState();
 });
 
-ipcMain.handle('settings:get', () => ({
-  shortcuts: currentShortcuts,
-  defaults: DEFAULT_SHORTCUTS,
-  meta: SHORTCUT_META,
-  platform: process.platform,
-  penPrefs: {
-    penColor: state.penColor,
-    drawSize: state.drawSize,
-    highlightSize: state.highlightSize,
-    eraserSize: state.eraserSize,
-    customColors: state.customColors,
-  },
-}));
+ipcMain.handle('settings:get', () => {
+  const displays = electronScreen.getAllDisplays();
+  const primary = electronScreen.getPrimaryDisplay();
+  const virtualBounds = getVirtualBounds();
+
+  return {
+    shortcuts: currentShortcuts,
+    defaults: DEFAULT_SHORTCUTS,
+    meta: SHORTCUT_META,
+    platform: process.platform,
+    penPrefs: {
+      penColor: state.penColor,
+      drawSize: state.drawSize,
+      highlightSize: state.highlightSize,
+      eraserSize: state.eraserSize,
+      customColors: state.customColors,
+    },
+    floatingDisplayId: state.floatingDisplayId || primary.id,
+    floatingPosition: state.floatingPosition,
+    virtualBounds,
+    displays: displays.map((d) => {
+      const nativeSize = getDisplayNativeSize(d);
+      return {
+        id: d.id,
+        label: `${nativeSize.width}×${nativeSize.height}${d.id === primary.id ? ' (주 모니터)' : ''}`,
+        bounds: d.bounds,
+        rendererWidth: d.bounds.width,
+        rendererHeight: d.bounds.height,
+        nativeWidth: nativeSize.width,
+        nativeHeight: nativeSize.height,
+        scaleFactor: d.scaleFactor,
+        isPrimary: d.id === primary.id,
+      };
+    }),
+  };
+});
 
 ipcMain.handle('settings:save', (_e, payload) => {
   const newShortcuts = payload?.shortcuts ?? payload;
@@ -853,8 +1096,32 @@ ipcMain.handle('settings:save', (_e, payload) => {
   if (!state.customColors.includes(state.penColor)) {
     state.penColor = state.customColors[0];
   }
+
+  // Handle floating display/position from settings
+  if (typeof payload?.floatingDisplayId === 'number') {
+    const displays = electronScreen.getAllDisplays();
+    const targetDisplay = displays.find((d) => d.id === payload.floatingDisplayId);
+    if (targetDisplay) {
+      state.floatingDisplayId = payload.floatingDisplayId;
+      if (payload.floatingPosition
+        && typeof payload.floatingPosition.x === 'number'
+        && typeof payload.floatingPosition.y === 'number') {
+        // payload coords are local overlay coords in the same DIP space as display.bounds
+        state.floatingPosition = clampFloatingPosition({
+          x: targetDisplay.bounds.x + Math.round(payload.floatingPosition.x),
+          y: targetDisplay.bounds.y + Math.round(payload.floatingPosition.y),
+        }, targetDisplay);
+      } else {
+        // Default: top-right of selected display
+        state.floatingPosition = getDefaultFloatingPosition(targetDisplay);
+      }
+    }
+  }
+
   persistPenPrefs();
 
+  // Move overlay to the (possibly new) target display
+  ensureOverlayForDisplay();
   syncAllStates();
 
   if (failed.length > 0) {
@@ -890,6 +1157,7 @@ ipcMain.handle('settings:reset', () => {
   state.highlightSize = 4;
   state.eraserSize = 4;
   state.floatingPosition = null;
+  state.floatingDisplayId = null;
   persistPenPrefs();
 
   syncAllStates();
@@ -912,21 +1180,38 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
 
   // Re-normalize floating position now that screen is available
+  // Backward compat: old saves were local coords → convert to absolute
   if (!state.floatingPosition && savedPenPrefs.rawFloatingPosition) {
-    state.floatingPosition = normalizeFloatingPosition(savedPenPrefs.rawFloatingPosition);
+    const raw = savedPenPrefs.rawFloatingPosition;
+    if (raw && typeof raw.x === 'number' && typeof raw.y === 'number') {
+      const primary = electronScreen.getPrimaryDisplay().bounds;
+      // If coords look like local (within a single display size), convert to absolute
+      if (raw.x < primary.width && raw.y < primary.height && raw.x >= 0 && raw.y >= 0) {
+        state.floatingPosition = { x: primary.x + raw.x, y: primary.y + raw.y };
+      } else {
+        state.floatingPosition = { x: raw.x, y: raw.y };
+      }
+    }
+  }
+
+  // Validate saved floatingDisplayId — if display no longer exists, fallback to primary
+  if (state.floatingDisplayId) {
+    const displays = electronScreen.getAllDisplays();
+    if (!displays.find((d) => d.id === state.floatingDisplayId)) {
+      const primary = electronScreen.getPrimaryDisplay();
+      state.floatingDisplayId = primary.id;
+      state.floatingPosition = getDefaultFloatingPosition(primary);
+      persistPenPrefs();
+    }
   }
 
   createOverlayWindow();
+  createFloatingWindow();
+  createHudWindow();
   createZoomWindow();
   createTray();
   applyShortcuts(currentShortcuts);
   syncAllStates();
-
-  setTimeout(() => {
-    const cursor = electronScreen.getCursorScreenPoint();
-    const display = electronScreen.getDisplayNearestPoint(cursor);
-    captureZoomFrame(cursor, display);
-  }, 120);
 });
 
 app.on('will-quit', () => {

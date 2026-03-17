@@ -43,6 +43,10 @@ let floatingPos = null;
 let hoveringFloating = false;
 let canvasDpr = window.devicePixelRatio || 1;
 let showFloatingControls = true;
+let showHud = true;
+// Authoritative display dimensions from main process (fallback to window.innerWidth)
+let knownDisplayWidth = null;
+let knownDisplayHeight = null;
 
 const CURSOR_MODES = new Set(['draw', 'highlight', 'eraser']);
 const MODE_INFO = {
@@ -55,6 +59,12 @@ const MODE_INFO = {
 function logicalW() { return window.innerWidth; }
 function logicalH() { return window.innerHeight; }
 
+function coordScale() { return window.devicePixelRatio || 1; }
+function screenW() { return logicalW() * coordScale(); }
+function screenH() { return logicalH() * coordScale(); }
+function cssToNative(value) { return value * coordScale(); }
+function nativeToCss(value) { return value / coordScale(); }
+
 function getToolSize(toolMode = mode) {
   if (toolMode === 'highlight') return highlightSize;
   if (toolMode === 'eraser') return eraserSize;
@@ -62,14 +72,18 @@ function getToolSize(toolMode = mode) {
 }
 
 function defaultFloatingPos() {
-  return { x: logicalW() - 50 - 24, y: 24 };
+  return {
+    x: screenW() - cssToNative(50) - cssToNative(24),
+    y: cssToNative(24),
+  };
 }
 
 function clampFloatingPos(x, y) {
-  const margin = 8;
+  const margin = cssToNative(8);
+  const buttonSize = cssToNative(50);
   return {
-    x: Math.max(margin, Math.min(x, logicalW() - 50 - margin)),
-    y: Math.max(margin, Math.min(y, logicalH() - 50 - margin)),
+    x: Math.max(margin, Math.min(x, screenW() - buttonSize - margin)),
+    y: Math.max(margin, Math.min(y, screenH() - buttonSize - margin)),
   };
 }
 
@@ -81,7 +95,7 @@ function getFloatingPos() {
 
 function shouldExpandRight() {
   const pos = getFloatingPos();
-  return pos.x + 25 < logicalW() / 2;
+  return pos.x + cssToNative(25) < screenW() / 2;
 }
 
 function applyFloatingPosition() {
@@ -89,15 +103,16 @@ function applyFloatingPosition() {
   const expandRight = shouldExpandRight();
   floatingRoot.classList.toggle('expand-right', expandRight);
 
-  const totalWidth = floatingRoot.offsetWidth || 50;
-  const buttonWidth = toggleButton.offsetWidth || 50;
-  const extraWidth = Math.max(0, totalWidth - buttonWidth);
+  const totalWidthCss = floatingRoot.offsetWidth || 50;
+  const buttonWidthCss = toggleButton.offsetWidth || 50;
+  const totalWidth = cssToNative(totalWidthCss);
+  const extraWidth = cssToNative(Math.max(0, totalWidthCss - buttonWidthCss));
   const anchoredLeft = expandRight ? pos.x : pos.x - extraWidth;
-  const clampedLeft = Math.max(8, Math.min(anchoredLeft, logicalW() - totalWidth - 8));
-  const clampedTop = Math.max(8, Math.min(pos.y, logicalH() - 50 - 8));
+  const clampedLeft = Math.max(cssToNative(8), Math.min(anchoredLeft, screenW() - totalWidth - cssToNative(8)));
+  const clampedTop = Math.max(cssToNative(8), Math.min(pos.y, screenH() - cssToNative(50) - cssToNative(8)));
 
-  floatingRoot.style.left = `${clampedLeft}px`;
-  floatingRoot.style.top = `${clampedTop}px`;
+  floatingRoot.style.left = `${nativeToCss(clampedLeft)}px`;
+  floatingRoot.style.top = `${nativeToCss(clampedTop)}px`;
 }
 
 function syncIgnoreMouse() {
@@ -147,7 +162,7 @@ function renderColors() {
 }
 
 function updateHUD() {
-  if (!overlayActive || mode === 'none') {
+  if (!showHud || !overlayActive || mode === 'none') {
     hud.classList.remove('visible');
     return;
   }
@@ -190,8 +205,9 @@ function renderFloating() {
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
   canvasDpr = dpr;
-  const width = window.innerWidth;
-  const height = window.innerHeight;
+  const width = logicalW();
+  const height = logicalH();
+
 
   canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(height * dpr);
@@ -348,10 +364,19 @@ function clearCursor() {
   lastCursorPos = null;
 }
 
+function getEventPoint(event) {
+  return {
+    x: Math.max(0, Math.min(logicalW(), event.clientX)),
+    y: Math.max(0, Math.min(logicalH(), event.clientY)),
+  };
+}
+
 canvas.addEventListener('mousedown', (event) => {
   if (!overlayActive) return;
   if (!CURSOR_MODES.has(mode)) return;
   if (event.button === 2) return;
+
+  const point = getEventPoint(event);
 
   isDrawing = true;
   const isEraser = mode === 'eraser';
@@ -366,20 +391,21 @@ canvas.addEventListener('mousedown', (event) => {
       : (isHighlight
         ? Math.max(getToolSize('highlight') * 2.2, getToolSize('highlight') + 6)
         : getToolSize('draw')),
-    points: [{ x: event.offsetX, y: event.offsetY }],
+    points: [point],
   };
   paths.push(currentPath);
   redrawAll();
 });
 
 canvas.addEventListener('mousemove', (event) => {
-  lastCursorPos = { x: event.offsetX, y: event.offsetY };
-  if (CURSOR_MODES.has(mode)) drawCursor(event.offsetX, event.offsetY);
+  const point = getEventPoint(event);
+  lastCursorPos = point;
+  if (CURSOR_MODES.has(mode)) drawCursor(point.x, point.y);
 
   if (!isDrawing || !currentPath) return;
 
   const points = currentPath.points;
-  const cur = { x: event.offsetX, y: event.offsetY };
+  const cur = point;
   const prev = points[points.length - 1];
   if (prev && prev.x === cur.x && prev.y === cur.y) return;
   points.push(cur);
@@ -436,9 +462,13 @@ toggleButton.addEventListener('pointermove', (event) => {
   const dy = event.clientY - dragState.startClientY;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
     dragState.moved = true;
-    floatingPos = clampFloatingPos(dragState.startLeft + dx, dragState.startTop + dy);
+    const clamped = clampFloatingPos(
+      dragState.startLeft + cssToNative(dx),
+      dragState.startTop + cssToNative(dy),
+    );
+    floatingPos = clamped;
     applyFloatingPosition();
-    window.electronAPI.setFloatingPosition(floatingPos.x, floatingPos.y);
+    window.electronAPI.setFloatingPosition(nativeToCss(clamped.x), nativeToCss(clamped.y));
   }
 });
 
@@ -542,12 +572,23 @@ function applyOverlayState(payload) {
     showFloatingControls = payload.showFloatingControls;
   }
 
+  if (typeof payload.showHud === 'boolean') {
+    showHud = payload.showHud;
+  }
+
+  // Store display dimensions from main process for canvas sizing
+  if (typeof payload.displayWidth === 'number' && typeof payload.displayHeight === 'number') {
+    knownDisplayWidth = payload.displayWidth;
+    knownDisplayHeight = payload.displayHeight;
+  }
+
   if (payload.floatingPosition && typeof payload.floatingPosition.x === 'number' && typeof payload.floatingPosition.y === 'number') {
-    floatingPos = clampFloatingPos(payload.floatingPosition.x, payload.floatingPosition.y);
+    floatingPos = clampFloatingPos(cssToNative(payload.floatingPosition.x), cssToNative(payload.floatingPosition.y));
   } else if (!floatingPos) {
     floatingPos = defaultFloatingPos();
   }
 
+  resizeCanvas();
   updateHUD();
   updateCursorStyle();
   refreshCursor();

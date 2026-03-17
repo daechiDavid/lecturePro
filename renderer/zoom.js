@@ -1,17 +1,17 @@
 // ── Elements ──────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('zoom-canvas');
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d', { alpha: false });
 const badge = document.getElementById('badge');
 
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
-  const width = window.innerWidth;
-  const height = window.innerHeight;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
 
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.scale(dpr, dpr);
@@ -20,30 +20,90 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// ── IPC: receive pre-cropped JPEG frames from main process ────────────────────
-// Main process uses desktopCapturer.getSources (respects setContentProtection)
-// so the zoom window itself never appears in the captured image.
+// ── Static snapshot panning ───────────────────────────────────────────────────
+// On zoom activation the main process sends a single full-screen PNG snapshot.
+// The renderer pans a zoomed view of this static image following the cursor
+// at a full 60 fps with zero IPC per frame — only lightweight cursor updates.
 
-const frameImg = new Image();
+let snapshotBitmap = null;
+let screenW = 0;
+let screenH = 0;
+let cursorX = 0;
+let cursorY = 0;
+let zoomLevel = 1.5;
+let animating = false;
 
-window.electronAPI.onZoomFrame((data) => {
-  // data: { jpeg: base64, dstX, dstY, dstW, dstH, viewW, viewH }
-  // dstX/Y/W/H place the captured region so the cursor lands at canvas center.
-  // Any out-of-bounds area (near screen edges) is filled with black.
-  frameImg.onload = () => {
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, data.viewW, data.viewH);
-    ctx.drawImage(frameImg, data.dstX, data.dstY, data.dstW, data.dstH);
-  };
-  frameImg.src = 'data:image/jpeg;base64,' + data.jpeg;
+function animate() {
+  if (!animating) return;
+  requestAnimationFrame(animate);
+  if (!snapshotBitmap) return;
+
+  const viewW = screenW;
+  const viewH = screenH;
+
+  // Source region on the snapshot (centered on cursor)
+  const srcW = viewW / zoomLevel;
+  const srcH = viewH / zoomLevel;
+  let srcX = cursorX - srcW / 2;
+  let srcY = cursorY - srcH / 2;
+
+  // Clamp so we don't go outside the snapshot
+  srcX = Math.max(0, Math.min(srcX, viewW - srcW));
+  srcY = Math.max(0, Math.min(srcY, viewH - srcH));
+
+  // Draw: source rect from snapshot → full canvas
+  ctx.drawImage(
+    snapshotBitmap,
+    // src rect (snapshot coords — use bitmap's native pixel ratio)
+    srcX * (snapshotBitmap.width / viewW),
+    srcY * (snapshotBitmap.height / viewH),
+    srcW * (snapshotBitmap.width / viewW),
+    srcH * (snapshotBitmap.height / viewH),
+    // dst rect (full viewport)
+    0, 0, viewW, viewH,
+  );
+}
+
+function startAnimation() {
+  if (animating) return;
+  animating = true;
+  requestAnimationFrame(animate);
+}
+
+function stopAnimation() {
+  animating = false;
+}
+
+// ── IPC: one-time snapshot from main process ──────────────────────────────────
+window.electronAPI.onZoomSnapshot(async (data) => {
+  try {
+    const blob = new Blob([data.png], { type: 'image/png' });
+    const bitmap = await createImageBitmap(blob);
+
+    if (snapshotBitmap) snapshotBitmap.close();
+    snapshotBitmap = bitmap;
+    screenW = data.screenW;
+    screenH = data.screenH;
+  } catch (_) { /* skip corrupt snapshot */ }
 });
 
-// ── IPC: zoom level badge ─────────────────────────────────────────────────────
+// ── IPC: high-frequency cursor position ───────────────────────────────────────
+window.electronAPI.onZoomCursorUpdate((data) => {
+  cursorX = data.x;
+  cursorY = data.y;
+  screenW = data.screenW;
+  screenH = data.screenH;
+});
+
+// ── IPC: zoom level ───────────────────────────────────────────────────────────
 window.electronAPI.onZoomActivated((level) => {
+  zoomLevel = level;
   badge.textContent = fmt(level);
+  startAnimation();
 });
 
 window.electronAPI.onZoomLevelChange((level) => {
+  zoomLevel = level;
   badge.textContent = fmt(level);
 });
 

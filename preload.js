@@ -19,12 +19,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onFloatingState:         (cb) => ipcRenderer.on('floating-state', (_e, d) => cb(d)),
   onFloatingDirection:     (cb) => ipcRenderer.on('floating-direction', (_e, d) => cb(d)),
   setFloatingPosition:     (x, y) => ipcRenderer.send('floating:set-position', { x, y }),
+  onHudState:              (cb) => ipcRenderer.on('hud-state', (_e, d) => cb(d)),
 
   // ── Zoom ───────────────────────────────────────────────────────────────────
   onZoomActivated:    (cb) => ipcRenderer.on('zoom-activated',    (_e, l) => cb(l)),
   onZoomLevelChange:  (cb) => ipcRenderer.on('zoom-level-change', (_e, l) => cb(l)),
   onZoomCursorUpdate: (cb) => ipcRenderer.on('zoom-cursor-update', (_e, d) => cb(d)),
-  onZoomFrame:        (cb) => ipcRenderer.on('zoom-frame',         (_e, d) => cb(d)),
+  onZoomSnapshot:     (cb) => ipcRenderer.on('zoom-snapshot',      (_e, d) => cb(d)),
 
   // ── General calls ──────────────────────────────────────────────────────────
   getScreenSource: () => ipcRenderer.invoke('get-screen-source'),
