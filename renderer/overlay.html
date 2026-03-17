@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>LecturePro Overlay</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-app-region: no-drag;
+    }
+
+    #canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    #cursor-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    #floating-root {
+      position: fixed;
+      top: 24px;
+      left: calc(100vw - 74px);
+      height: 50px;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      z-index: 10000;
+      pointer-events: auto;
+    }
+
+    #floating-root.expand-right {
+      flex-direction: row-reverse;
+    }
+
+    #toggle {
+      flex-shrink: 0;
+      width: 50px;
+      height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      border: none;
+      background: rgba(28, 30, 43, 0.94);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      outline: none !important;
+      user-select: none;
+      box-shadow: none !important;
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    }
+
+    #toggle.on {
+      background: rgba(88, 113, 255, 0.95);
+    }
+
+    #panel {
+      display: none;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      min-height: 50px;
+      padding: 6px 10px;
+      border-radius: 18px;
+      background: rgba(28, 30, 43, 0.94);
+      margin-right: 6px;
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    }
+
+    #floating-root.expand-right #panel {
+      margin-right: 0;
+      margin-left: 6px;
+    }
+
+    #panel.visible {
+      display: flex;
+    }
+
+    .toolbar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tool-btn {
+      height: 36px;
+      min-width: 52px;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.04);
+      color: #fff;
+      font-size: 12px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    .tool-btn.active {
+      background: rgba(255,255,255,0.25);
+      border-color: rgba(255,255,255,0.5);
+    }
+
+    .tool-btn.danger {
+      min-width: 64px;
+      background: rgba(255, 90, 90, 0.12);
+      border-color: rgba(255, 120, 120, 0.28);
+      color: #ffd7d7;
+    }
+
+    .tool-btn.danger:hover {
+      background: rgba(255, 90, 90, 0.2);
+    }
+
+    .colors {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 2px;
+    }
+
+    .color-btn {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.4);
+      cursor: pointer;
+    }
+
+    .color-btn.active {
+      border-color: #fff;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.26);
+    }
+
+    .size-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 210px;
+    }
+
+    .size-control {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255,255,255,0.86);
+      font-size: 12px;
+    }
+
+    .size-control.active {
+      display: flex;
+    }
+
+    .size-control label {
+      width: 54px;
+      flex-shrink: 0;
+    }
+
+    .size-control input[type="range"] {
+      flex: 1;
+      accent-color: #8da2ff;
+      cursor: pointer;
+    }
+
+    .size-value {
+      width: 34px;
+      text-align: right;
+      color: rgba(255,255,255,0.72);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* HUD bar at the bottom */
+    #hud {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: none;
+      align-items: center;
+      gap: 12px;
+      background: rgba(10, 10, 20, 0.82);
+      color: #eee;
+      padding: 8px 18px;
+      border-radius: 24px;
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    #hud.visible { display: flex; }
+
+    .hud-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ff4444;
+      animation: blink 1.2s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+
+    .hud-dot.highlight { background: #FFD700; }
+    .hud-dot.draw      { background: var(--pen-color, #FF4444); }
+    .hud-dot.eraser    { background: #aaa; animation: none; }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.25; }
+    }
+
+    #color-swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,0.35);
+      flex-shrink: 0;
+    }
+
+    #size-bar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: rgba(255,255,255,0.55);
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <canvas id="cursor-canvas"></canvas>
+
+  <div id="floating-root">
+    <div id="panel">
+      <div class="toolbar-row">
+        <button class="tool-btn" data-mode="draw">펜</button>
+        <button class="tool-btn" data-mode="highlight">형광펜</button>
+        <button class="tool-btn" data-mode="eraser">지우개</button>
+        <button class="tool-btn danger" id="clear-all-btn" type="button">전체삭제</button>
+        <div class="colors" id="colors"></div>
+      </div>
+      <div class="size-controls">
+        <div class="size-control" data-size-mode="draw">
+          <label for="size-draw">펜 크기</label>
+          <input id="size-draw" type="range" min="2" max="40" step="1">
+          <span class="size-value" id="size-draw-value">4</span>
+        </div>
+        <div class="size-control" data-size-mode="highlight">
+          <label for="size-highlight">형광펜</label>
+          <input id="size-highlight" type="range" min="2" max="40" step="1">
+          <span class="size-value" id="size-highlight-value">4</span>
+        </div>
+        <div class="size-control" data-size-mode="eraser">
+          <label for="size-eraser">지우개</label>
+          <input id="size-eraser" type="range" min="2" max="40" step="1">
+          <span class="size-value" id="size-eraser-value">4</span>
+        </div>
+      </div>
+    </div>
+    <button id="toggle" type="button" aria-label="오버레이 토글">OFF</button>
+  </div>
+
+  <div id="hud">
+    <div class="hud-dot" id="hud-dot"></div>
+    <span id="hud-label">펜 모드</span>
+    <div id="color-swatch"></div>
+    <div id="size-bar">
+      <span id="size-label">4px</span>
+    </div>
+  </div>
+
+  <script src="overlay.js"></script>
+</body>
+</html>

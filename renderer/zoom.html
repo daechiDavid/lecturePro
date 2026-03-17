@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>LecturePro Zoom</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #container {
+      width: 100vw;
+      height: 100vh;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #zoom-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Zoom level badge */
+    #badge {
+      position: absolute;
+      bottom: 18px;
+      right: 18px;
+      background: rgba(0, 0, 0, 0.48);
+      color: rgba(255, 255, 255, 0.92);
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      pointer-events: none;
+      letter-spacing: 0.3px;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <canvas id="zoom-canvas"></canvas>
+    <div id="badge">3x</div>
+  </div>
+
+  <script src="zoom.js"></script>
+</body>
+</html>

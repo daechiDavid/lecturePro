@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>LecturePro Floating</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    *:focus,
+    *:focus-visible {
+      outline: none !important;
+      box-shadow: none !important;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: rgba(28, 30, 43, 0.94);
+      border-radius: 25px;
+      -webkit-app-region: no-drag;
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    }
+
+    #root {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0;
+      gap: 0;
+      background: transparent;
+    }
+
+    #root.expand-right {
+      flex-direction: row-reverse;
+      justify-content: flex-end;
+    }
+
+    #toggle {
+      flex-shrink: 0;
+      width: 50px;
+      height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      border: none;
+      background: transparent !important;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      outline: none !important;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-app-region: no-drag;
+      user-select: none;
+      box-shadow: none !important;
+    }
+
+    #toggle-face {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: none !important;
+      pointer-events: none;
+    }
+
+    #toggle.on #toggle-face {
+      background: rgba(88, 113, 255, 0.95);
+    }
+
+    #toggle:focus,
+    #toggle:focus-visible {
+      outline: none !important;
+      box-shadow: none !important;
+    }
+
+    #panel {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      height: 50px;
+      padding: 6px 10px;
+      border-radius: 25px;
+      background: transparent;
+      border: none;
+      margin-right: 6px;
+    }
+
+    #root.expand-right #panel {
+      margin-right: 0;
+      margin-left: 6px;
+    }
+
+    #panel.visible {
+      display: flex;
+    }
+
+    .tool-btn {
+      height: 36px;
+      min-width: 52px;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.04);
+      color: #fff;
+      font-size: 12px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    .tool-btn.active {
+      background: rgba(255,255,255,0.25);
+      border-color: rgba(255,255,255,0.5);
+    }
+
+    .colors {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 2px;
+    }
+
+    .color-btn {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.4);
+      cursor: pointer;
+    }
+
+    .color-btn.active {
+      border-color: #fff;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.26);
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div id="panel">
+      <button class="tool-btn" data-mode="draw">펜</button>
+      <button class="tool-btn" data-mode="highlight">형광펜</button>
+      <button class="tool-btn" data-mode="eraser">지우개</button>
+      <div class="colors" id="colors"></div>
+    </div>
+    <div id="toggle" role="button" tabindex="0" aria-label="오버레이 토글">
+      <div id="toggle-face">OFF</div>
+    </div>
+  </div>
+
+  <script src="floating.js"></script>
+</body>
+</html>

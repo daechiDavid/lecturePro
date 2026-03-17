@@ -1,0 +1,19 @@
+node_modules/
+dist/
+out/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug/temp
+*.log
+/tmp/
+
+# Editor
+.vscode/
+.idea/
+
+# Claude
+.claude/
